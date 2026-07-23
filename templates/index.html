@@ -541,10 +541,24 @@
             <div class="card">
                 <div class="card-title"><span class="icon">📁</span> Upload & Controls</div>
 
-                <div class="upload-zone" id="uploadZone">
-                    <span class="upload-icon">⬆️</span>
-                    <p>Drag & drop your <strong>CSV file</strong> here<br>or click to browse</p>
-                    <input type="file" id="fileInput" accept=".csv">
+                <div class="input-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                    <button type="button" id="tabFileUpload" class="btn btn-download" style="flex: 1;">Upload File</button>
+                    <button type="button" id="tabPasteText" class="btn btn-download" style="flex: 1;">Paste Links</button>
+                </div>
+
+                <div id="fileUploadSection">
+                    <div class="upload-zone" id="uploadZone">
+                        <span class="upload-icon">⬆️</span>
+                        <p>Drag & drop your <strong>CSV or Excel (.xlsx) file</strong> here<br>or click to browse</p>
+                        <input type="file" id="fileInput" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+                    </div>
+                </div>
+
+                <div id="pasteTextSection" style="display: none;">
+                    <textarea id="pastedLinks" rows="5" placeholder="Paste WhatsApp invite links here, one per line..." style="width: 100%; padding: 0.5rem; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit; resize: vertical; margin-bottom: 0.5rem;"></textarea>
+                    <button id="uploadTextBtn" class="btn btn-download" style="width: 100%;">
+                        <span>⬆️</span> Load Pasted Links
+                    </button>
                 </div>
 
                 <div class="file-info" id="fileInfo">
@@ -605,7 +619,16 @@
              RESULTS TABLE
              ============================================================ -->
         <div class="card">
-            <div class="card-title"><span class="icon">📋</span> Results</div>
+            <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div><span class="icon">📋</span> Results</div>
+                <div class="result-filters" id="resultFilters" style="display: flex; gap: 8px;">
+                    <button class="table-badge filter-btn" data-filter="all" style="cursor: pointer; opacity: 1; border: none; background: rgba(255,255,255,0.1); color: #fff;">All</button>
+                    <button class="table-badge success filter-btn" data-filter="valid" style="cursor: pointer; opacity: 0.5; border: none;">Valid</button>
+                    <button class="table-badge unknown filter-btn" data-filter="invalid" style="cursor: pointer; opacity: 0.5; border: none;">Invalid</button>
+                    <button class="table-badge expired filter-btn" data-filter="expired" style="cursor: pointer; opacity: 0.5; border: none;">Expired</button>
+                    <button class="table-badge failed filter-btn" data-filter="error" style="cursor: pointer; opacity: 0.5; border: none;">Error</button>
+                </div>
+            </div>
             <div class="table-wrap">
                 <table id="resultsTable">
                     <thead>
@@ -625,12 +648,16 @@
                 <div class="empty-table" id="emptyTable">No results yet. Upload a CSV and start the scraper.</div>
             </div>
 
-            <!-- Download -->
             <div class="download-section" id="downloadSection" style="display:none;">
                 <div class="download-info" id="downloadInfo">—</div>
-                <button class="btn btn-download" id="btnDownload">
-                    <span>⬇</span> Download CSV
-                </button>
+                <div style="display: flex; gap: 0.5rem;">
+                    <button class="btn btn-download" id="btnDownload">
+                        <span>⬇</span> Download CSV
+                    </button>
+                    <button class="btn btn-download" id="btnDownloadExcel">
+                        <span>⬇</span> Download Excel
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -650,6 +677,13 @@
         const btnStart      = document.getElementById('btnStart');
         const btnStop       = document.getElementById('btnStop');
         const btnDownload   = document.getElementById('btnDownload');
+        const btnDownloadExcel = document.getElementById('btnDownloadExcel');
+        const tabFileUpload = document.getElementById('tabFileUpload');
+        const tabPasteText  = document.getElementById('tabPasteText');
+        const fileUploadSection = document.getElementById('fileUploadSection');
+        const pasteTextSection  = document.getElementById('pasteTextSection');
+        const pastedLinks   = document.getElementById('pastedLinks');
+        const uploadTextBtn = document.getElementById('uploadTextBtn');
         const statusBadge   = document.getElementById('statusBadge');
         const statusText    = document.getElementById('statusText');
         const progressBar   = document.getElementById('progressBar');
@@ -665,10 +699,23 @@
         const downloadSection = document.getElementById('downloadSection');
         const downloadInfo  = document.getElementById('downloadInfo');
         const toastContainer = document.getElementById('toastContainer');
+        const filterBtns    = document.querySelectorAll('.filter-btn');
 
         let eventSource = null;
         let fileUploaded = false;
         let rowIndex = 0;
+        let currentFilter = 'all';
+
+        function matchesFilter(rowObj, filterType) {
+            if (filterType === 'all') return true;
+            const status = rowObj['Status'] || '';
+            const procStatus = rowObj['Processing Status'] || '';
+            if (filterType === 'valid') return status === 'Active';
+            if (filterType === 'invalid') return status !== 'Active';
+            if (filterType === 'expired') return status === 'Expired';
+            if (filterType === 'error') return procStatus === 'Failed';
+            return true;
+        }
 
         // ----- Toast -----
         function showToast(message, type = 'info') {
@@ -738,6 +785,13 @@
             const procClass = row['Processing Status'] === 'Success' ? 'success' : 'failed';
 
             const tr = document.createElement('tr');
+            tr.dataset.status = row['Status'] || '';
+            tr.dataset.procStatus = row['Processing Status'] || '';
+            
+            if (!matchesFilter(row, currentFilter)) {
+                tr.style.display = 'none';
+            }
+
             tr.innerHTML = `
                 <td>${rowIndex}</td>
                 <td title="${escapeHtml(row['Invite Link'])}">${escapeHtml(row['Invite Link'])}</td>
@@ -770,8 +824,8 @@
         });
 
         async function handleFile(file) {
-            if (!file.name.toLowerCase().endsWith('.csv')) {
-                showToast('Please upload a .csv file', 'error');
+            if (!file.name.toLowerCase().endsWith('.csv') && !file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+                showToast('Please upload a .csv or Excel file', 'error');
                 return;
             }
             const fd = new FormData();
@@ -822,24 +876,105 @@
 
         // ----- Stop -----
         btnStop.addEventListener('click', async () => {
+            btnStop.disabled = true;
             try {
                 const res = await fetch('/api/stop', { method: 'POST' });
                 const data = await res.json();
                 if (data.error) {
                     showToast(data.error, 'error');
+                    btnStop.disabled = false;
                     return;
                 }
                 setStatus('stopping');
                 showToast('Stopping scraper…', 'info');
             } catch (err) {
                 showToast('Failed to stop: ' + err.message, 'error');
+                btnStop.disabled = false;
             }
         });
 
-        // ----- Download -----
         btnDownload.addEventListener('click', () => {
-            window.location.href = '/api/download';
+            window.location.href = '/api/download?filter=' + currentFilter;
         });
+
+        btnDownloadExcel.addEventListener('click', () => {
+            window.location.href = '/api/download/excel?filter=' + currentFilter;
+        });
+
+        filterBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                // Update active state
+                filterBtns.forEach(b => b.style.opacity = '0.5');
+                btn.style.opacity = '1';
+                currentFilter = btn.dataset.filter;
+
+                // Update rows
+                const rows = resultsBody.querySelectorAll('tr');
+                rows.forEach(tr => {
+                    const rowObj = {
+                        'Status': tr.dataset.status,
+                        'Processing Status': tr.dataset.procStatus
+                    };
+                    if (matchesFilter(rowObj, currentFilter)) {
+                        tr.style.display = '';
+                    } else {
+                        tr.style.display = 'none';
+                    }
+                });
+            });
+        });
+
+        tabFileUpload.addEventListener('click', () => {
+            tabFileUpload.classList.add('btn-start');
+            tabFileUpload.classList.remove('btn-download');
+            tabPasteText.classList.add('btn-download');
+            tabPasteText.classList.remove('btn-start');
+            fileUploadSection.style.display = 'block';
+            pasteTextSection.style.display = 'none';
+        });
+
+        tabPasteText.addEventListener('click', () => {
+            tabPasteText.classList.add('btn-start');
+            tabPasteText.classList.remove('btn-download');
+            tabFileUpload.classList.add('btn-download');
+            tabFileUpload.classList.remove('btn-start');
+            fileUploadSection.style.display = 'none';
+            pasteTextSection.style.display = 'block';
+        });
+
+        uploadTextBtn.addEventListener('click', async () => {
+            const text = pastedLinks.value;
+            if (!text.trim()) {
+                showToast('Please paste some links first.', 'error');
+                return;
+            }
+            uploadTextBtn.disabled = true;
+            try {
+                const res = await fetch('/api/upload_text', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }) 
+                });
+                const data = await res.json();
+                if (data.error) {
+                    showToast(data.error, 'error');
+                    return;
+                }
+                fileUploaded = true;
+                fileInfoText.textContent = `${data.filename} — ${data.link_count} link${data.link_count !== 1 ? 's' : ''} found`;
+                fileInfo.classList.add('visible');
+                btnStart.disabled = false;
+                showToast(`Loaded pasted links into ${data.filename}`, 'success');
+            } catch (err) {
+                showToast('Upload text error: ' + err.message, 'error');
+            } finally {
+                uploadTextBtn.disabled = false;
+            }
+        });
+
+        // Initialize active tab style
+        tabFileUpload.classList.add('btn-start');
+        tabFileUpload.classList.remove('btn-download');
 
         // ----- SSE -----
         function connectSSE() {
