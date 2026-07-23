@@ -650,12 +650,18 @@
 
             <div class="download-section" id="downloadSection" style="display:none;">
                 <div class="download-info" id="downloadInfo">—</div>
-                <div style="display: flex; gap: 0.5rem;">
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                     <button class="btn btn-download" id="btnDownload">
                         <span>⬇</span> Download CSV
                     </button>
+                    <button class="btn btn-download" id="btnDownloadBatch" style="background: linear-gradient(135deg, #10b981, #059669);">
+                        <span>📦</span> CSV (Batches)
+                    </button>
                     <button class="btn btn-download" id="btnDownloadExcel">
                         <span>⬇</span> Download Excel
+                    </button>
+                    <button class="btn btn-download" id="btnDownloadExcelBatch" style="background: linear-gradient(135deg, #10b981, #059669);">
+                        <span>📦</span> Excel (Batches)
                     </button>
                 </div>
             </div>
@@ -677,7 +683,9 @@
         const btnStart      = document.getElementById('btnStart');
         const btnStop       = document.getElementById('btnStop');
         const btnDownload   = document.getElementById('btnDownload');
+        const btnDownloadBatch = document.getElementById('btnDownloadBatch');
         const btnDownloadExcel = document.getElementById('btnDownloadExcel');
+        const btnDownloadExcelBatch = document.getElementById('btnDownloadExcelBatch');
         const tabFileUpload = document.getElementById('tabFileUpload');
         const tabPasteText  = document.getElementById('tabPasteText');
         const fileUploadSection = document.getElementById('fileUploadSection');
@@ -705,6 +713,7 @@
         let fileUploaded = false;
         let rowIndex = 0;
         let currentFilter = 'all';
+        let currentJobId = localStorage.getItem('wa_job_id');
 
         function matchesFilter(rowObj, filterType) {
             if (filterType === 'all') return true;
@@ -753,6 +762,12 @@
             const div = document.createElement('div');
             div.innerHTML = html;
             monitor.appendChild(div.firstElementChild || div);
+            
+            // Prune DOM to prevent browser freeze
+            while (monitor.childElementCount > 100) {
+                monitor.removeChild(monitor.firstChild);
+            }
+            
             monitor.scrollTop = monitor.scrollHeight;
         }
 
@@ -802,6 +817,11 @@
                 <td>${escapeHtml(row['Notes'])}</td>
             `;
             resultsBody.appendChild(tr);
+            
+            // Prune table
+            while (resultsBody.childElementCount > 100) {
+                resultsBody.removeChild(resultsBody.firstChild);
+            }
         }
 
         function escapeHtml(str) {
@@ -838,6 +858,8 @@
                     showToast(data.error, 'error');
                     return;
                 }
+                currentJobId = data.job_id;
+                localStorage.setItem('wa_job_id', currentJobId);
                 fileUploaded = true;
                 fileInfoText.textContent = `${data.filename} — ${data.link_count} link${data.link_count !== 1 ? 's' : ''} found`;
                 fileInfo.classList.add('visible');
@@ -859,8 +881,9 @@
             rowIndex = 0;
             downloadSection.style.display = 'none';
 
+            if (!currentJobId) return showToast('No job selected', 'error');
             try {
-                const res = await fetch('/api/start', { method: 'POST' });
+                const res = await fetch(`/api/start?job_id=${currentJobId}`, { method: 'POST' });
                 const data = await res.json();
                 if (data.error) {
                     showToast(data.error, 'error');
@@ -876,9 +899,10 @@
 
         // ----- Stop -----
         btnStop.addEventListener('click', async () => {
+            if (!currentJobId) return;
             btnStop.disabled = true;
             try {
-                const res = await fetch('/api/stop', { method: 'POST' });
+                const res = await fetch(`/api/stop?job_id=${currentJobId}`, { method: 'POST' });
                 const data = await res.json();
                 if (data.error) {
                     showToast(data.error, 'error');
@@ -894,11 +918,19 @@
         });
 
         btnDownload.addEventListener('click', () => {
-            window.location.href = '/api/download?filter=' + currentFilter;
+            if (currentJobId) window.location.href = `/api/download?job_id=${currentJobId}&filter=${currentFilter}`;
+        });
+
+        btnDownloadBatch.addEventListener('click', () => {
+            if (currentJobId) window.location.href = `/api/download?job_id=${currentJobId}&filter=${currentFilter}&batch=true`;
         });
 
         btnDownloadExcel.addEventListener('click', () => {
-            window.location.href = '/api/download/excel?filter=' + currentFilter;
+            if (currentJobId) window.location.href = `/api/download/excel?job_id=${currentJobId}&filter=${currentFilter}`;
+        });
+        
+        btnDownloadExcelBatch.addEventListener('click', () => {
+            if (currentJobId) window.location.href = `/api/download/excel?job_id=${currentJobId}&filter=${currentFilter}&batch=true`;
         });
 
         filterBtns.forEach(btn => {
@@ -960,6 +992,8 @@
                     showToast(data.error, 'error');
                     return;
                 }
+                currentJobId = data.job_id;
+                localStorage.setItem('wa_job_id', currentJobId);
                 fileUploaded = true;
                 fileInfoText.textContent = `${data.filename} — ${data.link_count} link${data.link_count !== 1 ? 's' : ''} found`;
                 fileInfo.classList.add('visible');
@@ -978,8 +1012,9 @@
 
         // ----- SSE -----
         function connectSSE() {
+            if (!currentJobId) return;
             if (eventSource) eventSource.close();
-            eventSource = new EventSource('/api/stream');
+            eventSource = new EventSource(`/api/stream?job_id=${currentJobId}`);
 
             eventSource.addEventListener('started', e => {
                 const d = JSON.parse(e.data);
@@ -1028,8 +1063,9 @@
 
         // ----- Initial status check -----
         (async () => {
+            if (!currentJobId) return;
             try {
-                const res = await fetch('/api/status');
+                const res = await fetch(`/api/status?job_id=${currentJobId}`);
                 const data = await res.json();
                 if (data.status !== 'idle') {
                     setStatus(data.status);
@@ -1045,7 +1081,7 @@
                     }
                     if (data.status === 'done' || data.status === 'stopped') {
                         // Load existing results
-                        const rr = await fetch('/api/results');
+                        const rr = await fetch(`/api/results?job_id=${currentJobId}`);
                         const results = await rr.json();
                         results.forEach(r => addResultRow(r));
                         updateCounters({
