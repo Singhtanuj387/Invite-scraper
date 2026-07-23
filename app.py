@@ -197,12 +197,26 @@ def upload():
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
 
-    if not file.filename.lower().endswith(".csv"):
-        return jsonify({"error": "Only CSV files are accepted"}), 400
-
-    # Save
+    filename = file.filename.lower()
     save_path = os.path.join(UPLOAD_DIR, "input.csv")
-    file.save(save_path)
+    
+    if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        import openpyxl
+        from io import BytesIO
+        try:
+            wb = openpyxl.load_workbook(BytesIO(file.read()), data_only=True)
+            ws = wb.active
+            with open(save_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                for row in ws.iter_rows(values_only=True):
+                    if row and row[0]:
+                        writer.writerow([str(row[0]).strip()])
+        except Exception as e:
+            return jsonify({"error": f"Error reading Excel file: {str(e)}"}), 400
+    elif filename.endswith(".csv"):
+        file.save(save_path)
+    else:
+        return jsonify({"error": "Only CSV and Excel files are accepted"}), 400
 
     # Count links
     count = 0
@@ -217,6 +231,36 @@ def upload():
         "success": True,
         "filename": file.filename,
         "link_count": count,
+    })
+
+
+@app.route("/api/upload_text", methods=["POST"])
+def upload_text():
+    data = request.get_json(force=True) or {}
+    text = data.get("text", "")
+    if not text.strip():
+        return jsonify({"error": "Empty text"}), 400
+    
+    links = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("http"):
+            links.append(line)
+            
+    if not links:
+        return jsonify({"error": "No valid http links found in text"}), 400
+        
+    save_path = os.path.join(UPLOAD_DIR, "input.csv")
+    with open(save_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        for link in links:
+            writer.writerow([link])
+            
+    scraper_state["input_file"] = save_path
+    return jsonify({
+        "success": True,
+        "filename": "Pasted Links",
+        "link_count": len(links),
     })
 
 
@@ -302,17 +346,89 @@ def stream():
     )
 
 
+def filter_row(row, filter_type):
+    if not filter_type or filter_type == 'all':
+        return True
+    
+    status = row.get("Status", "")
+    proc_status = row.get("Processing Status", "")
+    
+    if filter_type == 'valid':
+        return status == 'Active'
+    elif filter_type == 'invalid':
+        return status != 'Active'
+    elif filter_type == 'expired':
+        return status == 'Expired'
+    elif filter_type == 'error':
+        return proc_status == 'Failed'
+    return True
+
+
 @app.route("/api/download", methods=["GET"])
 def download():
+    filter_type = request.args.get("filter", "all")
     output_path = scraper_state.get("output_file")
     if not output_path or not os.path.exists(output_path):
         return jsonify({"error": "No output file available yet"}), 404
 
+    if filter_type == "all":
+        return send_file(
+            output_path,
+            mimetype="text/csv",
+            as_attachment=True,
+            download_name="scraper_output.csv",
+        )
+        
+    import io
+    out_str = io.StringIO()
+    with open(output_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        writer = csv.DictWriter(out_str, fieldnames=reader.fieldnames, quoting=csv.QUOTE_ALL)
+        writer.writeheader()
+        for row in reader:
+            if filter_row(row, filter_type):
+                writer.writerow(row)
+                
+    out_bytes = io.BytesIO(out_str.getvalue().encode('utf-8'))
+    
     return send_file(
-        output_path,
+        out_bytes,
         mimetype="text/csv",
         as_attachment=True,
-        download_name="scraper_output.csv",
+        download_name=f"scraper_output_{filter_type}.csv",
+    )
+
+
+@app.route("/api/download/excel", methods=["GET"])
+def download_excel():
+    filter_type = request.args.get("filter", "all")
+    output_path = scraper_state.get("output_file")
+    if not output_path or not os.path.exists(output_path):
+        return jsonify({"error": "No output file available yet"}), 404
+
+    # Read from CSV and write to Excel in memory
+    import openpyxl
+    from io import BytesIO
+    
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    
+    with open(output_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        ws.append(reader.fieldnames)
+        for row in reader:
+            if filter_row(row, filter_type):
+                ws.append(list(row.values()))
+            
+    out = BytesIO()
+    wb.save(out)
+    out.seek(0)
+    
+    return send_file(
+        out,
+        as_attachment=True,
+        download_name=f"scraper_output_{filter_type}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 
