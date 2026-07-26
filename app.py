@@ -153,8 +153,8 @@ def run_scraper(job_id: str):
                     }
                 })
 
-                # Rate-limit to be polite
-                time.sleep(0.5)
+                import random
+                time.sleep(random.uniform(1.5, 3.5))
 
     except Exception as e:
         job["status"] = "error"

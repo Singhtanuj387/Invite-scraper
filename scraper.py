@@ -5,8 +5,17 @@ import csv
 import argparse
 import sys
 import time
+import random
 
-def check_whatsapp_invite(invite_url):
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/114.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15',
+]
+
+def check_whatsapp_invite(invite_url, max_retries=3):
     """
     Extracts basic public metadata from a WhatsApp group invite link.
     """
@@ -22,33 +31,54 @@ def check_whatsapp_invite(invite_url):
         "Notes": "Failed"
     }
     
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-    }
-    
-    try:
-        response = requests.get(invite_url, headers=headers, timeout=10)
+    for attempt in range(max_retries):
+        headers = {
+            'User-Agent': random.choice(USER_AGENTS),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+        }
         
-        if response.status_code == 200:
-            result["Processing Status"] = "Success"
-            soup = BeautifulSoup(response.text, 'html.parser')
-            og_title = soup.find("meta", property="og:title")
-            
-            if og_title and og_title.get("content"):
-                result["Group Name"] = og_title.get("content").strip()
-                result["Status"] = "Active"
-                result["Notes"] = "Valid link"
+        try:
+            response = requests.get(invite_url, headers=headers, timeout=10)
+        
+            if response.status_code == 200:
+                result["Processing Status"] = "Success"
+                soup = BeautifulSoup(response.text, 'html.parser')
+                og_title = soup.find("meta", property="og:title")
+                
+                if og_title and og_title.get("content"):
+                    result["Group Name"] = og_title.get("content").strip()
+                    result["Status"] = "Active"
+                    result["Notes"] = "Valid link"
+                else:
+                    result["Status"] = "Expired"
+                    result["Notes"] = "Invalid Link"
+                break
+                
+            elif response.status_code == 429:
+                if attempt < max_retries - 1:
+                    time.sleep(random.uniform(4.0, 8.0) * (attempt + 1))
+                    continue
+                else:
+                    result["Processing Status"] = "Failed"
+                    result["Notes"] = "Failed (HTTP 429 Rate Limited)"
+                    break
+                    
             else:
-                result["Status"] = "Expired"
-                result["Notes"] = "Invalid Link"
-        else:
+                result["Processing Status"] = "Failed"
+                result["Notes"] = f"Failed (HTTP {response.status_code})"
+                break
+                
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(random.uniform(2.0, 5.0))
+                continue
             result["Processing Status"] = "Failed"
-            result["Notes"] = f"Failed (HTTP {response.status_code})"
+            result["Notes"] = f"Failed ({type(e).__name__})"
             
-    except requests.exceptions.RequestException as e:
-        result["Processing Status"] = "Failed"
-        result["Notes"] = f"Failed ({type(e).__name__})"
-        
     return result
 
 def process_csv(input_csv, output_csv):
