@@ -1,4 +1,4 @@
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import csv
@@ -42,7 +42,7 @@ def check_whatsapp_invite(invite_url, max_retries=3):
         }
         
         try:
-            response = requests.get(invite_url, headers=headers, timeout=10)
+            response = requests.get(invite_url, headers=headers, timeout=15, impersonate="chrome110")
         
             if response.status_code == 200:
                 result["Processing Status"] = "Success"
