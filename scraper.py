@@ -28,15 +28,13 @@ def check_whatsapp_invite(invite_url, max_retries=3):
     
     for attempt in range(max_retries):
         payload = {
-            'api_key': SCRAPER_API_KEY,
-            'url': invite_url,
-            'render': 'false', # We only need the HTML source code
-            'premium': 'false'
+            'token': SCRAPER_API_KEY,
+            'url': invite_url
         }
         
         try:
-            # ScraperAPI requests can take up to 60s since they rotate proxies on their end
-            response = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
+            # Scrape.do requests can take time since they rotate proxies on their end
+            response = requests.get('http://api.scrape.do', params=payload, timeout=60)
         
             if response.status_code == 200:
                 result["Processing Status"] = "Success"
@@ -53,24 +51,24 @@ def check_whatsapp_invite(invite_url, max_retries=3):
                 break
                 
             elif response.status_code == 429:
-                # ScraperAPI concurrency limit reached
+                # Scrape.do concurrency limit reached
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
                 else:
                     result["Processing Status"] = "Failed"
-                    result["Notes"] = "Failed (ScraperAPI Rate Limited)"
+                    result["Notes"] = "Failed (Scrape.do Rate Limited)"
                     break
             elif response.status_code == 401:
                 result["Processing Status"] = "Failed"
-                result["Notes"] = "Failed (Invalid ScraperAPI Key)"
+                result["Notes"] = "Failed (Invalid Scrape.do Token)"
                 break
             else:
                 if attempt < max_retries - 1:
                     time.sleep(2)
                     continue
                 result["Processing Status"] = "Failed"
-                result["Notes"] = f"Failed (ScraperAPI HTTP {response.status_code})"
+                result["Notes"] = f"Failed (Scrape.do HTTP {response.status_code})"
                 break
                 
         except requests.exceptions.RequestException as e:
