@@ -1,23 +1,18 @@
-from curl_cffi import requests
+import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import csv
 import argparse
 import sys
 import time
-import random
+import urllib.parse
+import os
 
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/114.0',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15',
-]
+SCRAPER_API_KEY = os.environ.get("SCRAPER_API_KEY")
 
 def check_whatsapp_invite(invite_url, max_retries=3):
     """
-    Extracts basic public metadata from a WhatsApp group invite link.
+    Extracts basic public metadata from a WhatsApp group invite link using ScraperAPI.
     """
     result = {
         "Invite Link": invite_url,
@@ -32,17 +27,16 @@ def check_whatsapp_invite(invite_url, max_retries=3):
     }
     
     for attempt in range(max_retries):
-        headers = {
-            'User-Agent': random.choice(USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
+        payload = {
+            'api_key': SCRAPER_API_KEY,
+            'url': invite_url,
+            'render': 'false', # We only need the HTML source code
+            'premium': 'false'
         }
         
         try:
-            response = requests.get(invite_url, headers=headers, timeout=15, impersonate="chrome110")
+            # ScraperAPI requests can take up to 60s since they rotate proxies on their end
+            response = requests.get('http://api.scraperapi.com', params=payload, timeout=60)
         
             if response.status_code == 200:
                 result["Processing Status"] = "Success"
@@ -59,22 +53,29 @@ def check_whatsapp_invite(invite_url, max_retries=3):
                 break
                 
             elif response.status_code == 429:
+                # ScraperAPI concurrency limit reached
                 if attempt < max_retries - 1:
-                    time.sleep(random.uniform(4.0, 8.0) * (attempt + 1))
+                    time.sleep(2)
                     continue
                 else:
                     result["Processing Status"] = "Failed"
-                    result["Notes"] = "Failed (HTTP 429 Rate Limited)"
+                    result["Notes"] = "Failed (ScraperAPI Rate Limited)"
                     break
-                    
-            else:
+            elif response.status_code == 401:
                 result["Processing Status"] = "Failed"
-                result["Notes"] = f"Failed (HTTP {response.status_code})"
+                result["Notes"] = "Failed (Invalid ScraperAPI Key)"
+                break
+            else:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                result["Processing Status"] = "Failed"
+                result["Notes"] = f"Failed (ScraperAPI HTTP {response.status_code})"
                 break
                 
         except requests.exceptions.RequestException as e:
             if attempt < max_retries - 1:
-                time.sleep(random.uniform(2.0, 5.0))
+                time.sleep(2)
                 continue
             result["Processing Status"] = "Failed"
             result["Notes"] = f"Failed ({type(e).__name__})"
@@ -82,18 +83,15 @@ def check_whatsapp_invite(invite_url, max_retries=3):
     return result
 
 def process_csv(input_csv, output_csv):
-    # Determine the column headers exactly as requested
     fieldnames = ['Invite Link', 'Group Name', 'Status', 'Members', 'Country', 'Admin', 'Processing Status', 'Timestamp of Scan', 'Notes']
     
     links_to_process = []
     
-    # Read input CSV
     try:
         with open(input_csv, mode='r', encoding='utf-8') as infile:
             reader = csv.reader(infile)
             for row in reader:
-                if row:  # skip empty lines
-                    # Assume link is in the first column, or find it by parsing
+                if row:  
                     link = row[0].strip()
                     if link.startswith("http"):
                         links_to_process.append(link)
@@ -107,7 +105,6 @@ def process_csv(input_csv, output_csv):
 
     print(f"Found {len(links_to_process)} links. Processing...")
 
-    # Write output CSV
     try:
         with open(output_csv, mode='w', newline='', encoding='utf-8') as outfile:
             writer = csv.DictWriter(outfile, fieldnames=fieldnames, quoting=csv.QUOTE_ALL)
@@ -118,15 +115,12 @@ def process_csv(input_csv, output_csv):
                 data = check_whatsapp_invite(link)
                 writer.writerow(data)
                 
-                # Sleep briefly to be polite and avoid rate limits
-                time.sleep(0.5)
-                
         print(f"\nDone! Results saved to {output_csv}")
     except Exception as e:
         print(f"Error writing to {output_csv}: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WhatsApp Group Invite Scraper")
+    parser = argparse.ArgumentParser(description="WhatsApp Group Invite Scraper via ScraperAPI")
     parser.add_argument("--input", "-i", required=True, help="Input CSV file containing links")
     parser.add_argument("--output", "-o", required=True, help="Output CSV file for results")
     
