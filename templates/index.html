@@ -786,6 +786,9 @@
                 <h1>WA Scraper <span>Dashboard</span></h1>
             </div>
             <div class="header-right" style="display: flex; gap: 12px; align-items: center;">
+                <button type="button" id="btnNewSession" class="btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: var(--text-secondary); padding: 6px 14px; font-size: 0.8rem; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;" title="Clear view and start a fresh session">
+                    <span>✨</span> New Session
+                </button>
                 <div class="status-badge" id="waStatusBadge" style="cursor: pointer; background: rgba(255,255,255,0.05);">
                     <span id="waStatusIcon">🔄</span>
                     <span id="waStatusText">Connecting WhatsApp...</span>
@@ -1464,7 +1467,48 @@
                 showToast('WhatsApp login restarting...', 'success');
             }
         });
-        
+
+        document.getElementById('btnNewSession').addEventListener('click', () => {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+            localStorage.removeItem('wa_job_id');
+            currentJobId = null;
+            fileUploaded = false;
+            rowIndex = 0;
+            
+            // Clear results table
+            resultsBody.innerHTML = '';
+            emptyTable.style.display = 'block';
+            
+            // Clear monitor logs
+            monitor.innerHTML = '';
+            if (monitorEmpty) {
+                monitor.appendChild(monitorEmpty);
+                monitorEmpty.style.display = 'block';
+            }
+            
+            // Reset counters
+            updateCounters({ processed: 0, total: 0, success: 0, failed: 0, expired: 0 });
+            
+            // Reset status & buttons
+            setStatus('idle');
+            btnStart.disabled = true;
+            btnStop.disabled = true;
+            downloadSection.style.display = 'none';
+            rateLimitBanner.style.display = 'none';
+            if (cooldownInterval) clearInterval(cooldownInterval);
+            
+            // Reset file upload state
+            fileInput.value = '';
+            fileInfo.classList.remove('visible');
+            const pasteInput = document.getElementById('pasteInput');
+            if (pasteInput) pasteInput.value = '';
+            
+            showToast('Started fresh session', 'info');
+        });
+
         setInterval(checkBotStatus, 3000);
         checkBotStatus();
 

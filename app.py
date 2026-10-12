@@ -435,7 +435,7 @@ def download():
     import zipfile
     
     if is_batch:
-        zip_path = os.path.join(OUTPUT_DIR, f"scraper_output_{filter_type}_csv.zip")
+        zip_path = os.path.join(temp_dir, f"scraper_output_{filter_type}_csv.zip")
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             with open(output_path, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
@@ -503,7 +503,7 @@ def download_excel():
     os.makedirs(temp_dir, exist_ok=True)
     
     if is_batch:
-        zip_path = os.path.join(OUTPUT_DIR, f"scraper_output_{filter_type}_excel.zip")
+        zip_path = os.path.join(temp_dir, f"scraper_output_{filter_type}_excel.zip")
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             with open(output_path, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
