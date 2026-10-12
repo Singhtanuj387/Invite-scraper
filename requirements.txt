@@ -1,0 +1,9 @@
+requests==2.31.0
+beautifulsoup4==4.12.2
+flask>=3.0
+gunicorn>=21.2.0
+openpyxl>=3.1.2
+curl_cffi>=0.7.3
+phonenumbers>=8.13.0
+pycountry>=22.3.5
+playwright>=1.40.0
