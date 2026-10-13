@@ -167,6 +167,13 @@ def run_scraper(job_id: str):
                 if len(job["results"]) > 100:
                     job["results"].pop(0)
 
+                # Check if WhatsApp bot suffered an unrecoverable disconnection or crash
+                if wa_bot.status in ["error", "needs_scan", "stopped"]:
+                    job["status"] = "error"
+                    job["error"] = "WhatsApp session disconnected or needs QR scan. Scraping paused."
+                    broadcast_event(job_id, "error", {"message": job["error"]})
+                    return
+
                 # Broadcast the result
                 broadcast_event(job_id, "result", {
                     "index": idx,

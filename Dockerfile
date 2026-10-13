@@ -6,10 +6,11 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including dumb-init to reap zombie Chromium processes
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
+    dumb-init \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python requirements
@@ -28,6 +29,9 @@ RUN mkdir -p uploads outputs wa_session
 # Port configuration (Railway automatically provides PORT environment variable)
 ENV PORT=5000
 EXPOSE 5000
+
+# Use dumb-init as init process (PID 1) to forward signals and reap zombie Chromium renderer processes
+ENTRYPOINT ["dumb-init", "--"]
 
 # Launch application
 CMD ["python", "app.py"]
