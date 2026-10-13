@@ -45,6 +45,14 @@ def retry_login():
         return jsonify({"success": True})
     return jsonify({"error": "Already running"}), 400
 
+@app.route("/api/logout_wa", methods=["POST"])
+def logout_wa():
+    try:
+        wa_bot.logout()
+        return jsonify({"success": True, "message": "Logged out from WhatsApp."})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ---------------------------------------------------------------------------
 # Directories
 # ---------------------------------------------------------------------------

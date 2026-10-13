@@ -789,6 +789,9 @@
                 <button type="button" id="btnNewSession" class="btn" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); color: var(--text-secondary); padding: 6px 14px; font-size: 0.8rem; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;" title="Clear view and start a fresh session">
                     <span>✨</span> New Session
                 </button>
+                <button type="button" id="btnWaLogout" class="btn" style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; padding: 6px 14px; font-size: 0.8rem; border-radius: 8px; cursor: pointer; display: none; align-items: center; gap: 6px;" title="Log out from WhatsApp account">
+                    <span>🚪</span> Logout WA
+                </button>
                 <div class="status-badge" id="waStatusBadge" style="cursor: pointer; background: rgba(255,255,255,0.05);">
                     <span id="waStatusIcon">🔄</span>
                     <span id="waStatusText">Connecting WhatsApp...</span>
@@ -1424,26 +1427,32 @@
                 const waStatusText = document.getElementById('waStatusText');
                 const waStatusIcon = document.getElementById('waStatusIcon');
 
+                const btnWaLogout = document.getElementById('btnWaLogout');
+
                 if (data.status === 'logged_in') {
                     waStatusIcon.textContent = '✅';
                     waStatusText.textContent = 'WhatsApp: Logged In';
                     waStatusBadge.style.color = 'var(--success)';
                     waStatusBadge.style.border = '1px solid rgba(0, 194, 152, 0.3)';
-                } else if (data.status === 'needs_scan') {
-                    waStatusIcon.textContent = '📱';
-                    waStatusText.textContent = 'WhatsApp: Needs Scan';
-                    waStatusBadge.style.color = 'var(--accent)';
-                    waStatusBadge.style.border = '1px solid rgba(56, 189, 248, 0.3)';
-                } else if (data.status === 'error' || data.status === 'stopped') {
-                    waStatusIcon.textContent = '❌';
-                    waStatusText.textContent = 'WhatsApp: Disconnected (Click to Restart)';
-                    waStatusBadge.style.color = 'var(--failed)';
-                    waStatusBadge.style.border = '1px solid rgba(244, 63, 94, 0.3)';
+                    if (btnWaLogout) btnWaLogout.style.display = 'flex';
                 } else {
-                    waStatusIcon.textContent = '🔄';
-                    waStatusText.textContent = 'WhatsApp: Starting...';
-                    waStatusBadge.style.color = 'var(--text-primary)';
-                    waStatusBadge.style.border = '1px solid rgba(255, 255, 255, 0.1)';
+                    if (btnWaLogout) btnWaLogout.style.display = 'none';
+                    if (data.status === 'needs_scan') {
+                        waStatusIcon.textContent = '📱';
+                        waStatusText.textContent = 'WhatsApp: Needs Scan';
+                        waStatusBadge.style.color = 'var(--accent)';
+                        waStatusBadge.style.border = '1px solid rgba(56, 189, 248, 0.3)';
+                    } else if (data.status === 'error' || data.status === 'stopped') {
+                        waStatusIcon.textContent = '❌';
+                        waStatusText.textContent = 'WhatsApp: Disconnected (Click to Restart)';
+                        waStatusBadge.style.color = 'var(--failed)';
+                        waStatusBadge.style.border = '1px solid rgba(244, 63, 94, 0.3)';
+                    } else {
+                        waStatusIcon.textContent = '🔄';
+                        waStatusText.textContent = 'WhatsApp: Starting...';
+                        waStatusBadge.style.color = 'var(--text-primary)';
+                        waStatusBadge.style.border = '1px solid rgba(255, 255, 255, 0.1)';
+                    }
                 }
 
                 if (data.status === 'needs_scan') {
@@ -1465,6 +1474,31 @@
                 document.getElementById('waStatusText').textContent = 'Restarting...';
                 await fetch('/api/retry_login', { method: 'POST' });
                 showToast('WhatsApp login restarting...', 'success');
+            }
+        });
+
+        document.getElementById('btnWaLogout').addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to log out of WhatsApp? You will need to scan the QR code to reconnect.')) {
+                return;
+            }
+            const btn = document.getElementById('btnWaLogout');
+            btn.disabled = true;
+            btn.innerHTML = '<span>⏳</span> Logging out...';
+            showToast('Logging out from WhatsApp...', 'info');
+            try {
+                const res = await fetch('/api/logout_wa', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showToast('Logged out! Waiting for new QR code...', 'success');
+                    checkBotStatus();
+                } else {
+                    showToast(data.error || 'Logout failed', 'error');
+                }
+            } catch (err) {
+                showToast('Logout error: ' + err.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span>🚪</span> Logout WA';
             }
         });
 

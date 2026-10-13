@@ -46,6 +46,27 @@ class WhatsAppBot:
         self.cmd_queue.put(("SCRAPE", link, result_q))
         return result_q.get() # Blocking wait
 
+    def logout(self):
+        """Logs out from WhatsApp, clears saved session tokens, and requests fresh QR code."""
+        print("[WA Bot] Logout requested...")
+        if self.thread and self.thread.is_alive():
+            res_q = queue.Queue()
+            self.cmd_queue.put(("LOGOUT", None, res_q))
+            try:
+                return res_q.get(timeout=20)
+            except queue.Empty:
+                print("[WA Bot] Logout command timed out waiting for response.")
+
+        # Fallback if thread not alive
+        import shutil
+        self.stop()
+        if os.path.exists(self.user_data_dir):
+            shutil.rmtree(self.user_data_dir, ignore_errors=True)
+        self.status = "stopped"
+        self.qr_base64 = None
+        self.start()
+        return True
+
     def stop(self):
         if self.status != "stopped":
             self.cmd_queue.put(("STOP", None, None))
@@ -176,61 +197,94 @@ class WhatsAppBot:
                 print("[WA Bot] Loading WhatsApp Web...")
                 self.page.goto("https://web.whatsapp.com", timeout=60000)
 
-                # Check if logged in or needs QR
                 while True:
-                    try:
-                        # Check for stop command
-                        with self.cmd_queue.mutex:
-                            stop_idx = None
-                            for i, item in enumerate(self.cmd_queue.queue):
-                                if item[0] == "STOP":
-                                    stop_idx = i
+                    # Check if logged in or needs QR
+                    while True:
+                        try:
+                            # Check for stop command
+                            with self.cmd_queue.mutex:
+                                stop_idx = None
+                                for i, item in enumerate(self.cmd_queue.queue):
+                                    if item[0] == "STOP":
+                                        stop_idx = i
+                                        break
+                                if stop_idx is not None:
+                                    self.cmd_queue.queue.pop(stop_idx)
+                                    if self.browser:
+                                        self.browser.close()
+                                    self.status = "stopped"
+                                    return
+
+                            # Look for the chat list (logged in) or the QR code canvas
+                            element = self.page.wait_for_selector("canvas, #pane-side", timeout=3000)
+                            if element:
+                                tag = element.evaluate("el => el.tagName").lower()
+                                if tag == "canvas":
+                                    self.status = "needs_scan"
+                                    time.sleep(2) # Let QR fully render
+                                    self.qr_base64 = self.page.evaluate('document.querySelector("canvas").toDataURL()')
+                                    time.sleep(2)
+                                    continue
+                                else:
+                                    if self.status != "logged_in":
+                                        self._inject_wpp()
+                                    self.status = "logged_in"
+                                    self.qr_base64 = None
                                     break
-                            if stop_idx is not None:
-                                self.cmd_queue.queue.pop(stop_idx)
-                                if self.browser:
-                                    self.browser.close()
-                                self.status = "stopped"
-                                return
-
-                        # Look for the chat list (logged in) or the QR code canvas
-                        element = self.page.wait_for_selector("canvas, #pane-side", timeout=3000)
-                        if element:
-                            tag = element.evaluate("el => el.tagName").lower()
-                            if tag == "canvas":
-                                self.status = "needs_scan"
-                                time.sleep(2) # Let QR fully render
-                                self.qr_base64 = self.page.evaluate('document.querySelector("canvas").toDataURL()')
-                                time.sleep(2)
-                                continue
-                            else:
-                                if self.status != "logged_in":
-                                    self._inject_wpp()
-                                self.status = "logged_in"
-                                self.qr_base64 = None
+                        except Exception as e:
+                            err_msg = str(e)
+                            if "Event loop is closed" in err_msg or "Target page, context or browser has been closed" in err_msg:
+                                print("[WA Bot] Browser closed, exiting loop.")
                                 break
-                    except Exception as e:
-                        err_msg = str(e)
-                        if "Event loop is closed" in err_msg or "Target page, context or browser has been closed" in err_msg:
-                            print("[WA Bot] Browser closed, exiting loop.")
-                            break
-                        if "Timeout" not in err_msg:
-                            print("[WA Bot] Status loop error:", err_msg)
-                            time.sleep(1)
+                            if "Timeout" not in err_msg:
+                                print("[WA Bot] Status loop error:", err_msg)
+                                time.sleep(1)
 
-                print("[WA Bot] Logged in successfully!")
+                    print("[WA Bot] Logged in successfully!")
 
-                # Command loop
-                while True:
-                    try:
-                        cmd, data, res_q = self.cmd_queue.get(timeout=1)
-                        if cmd == "STOP":
-                            break
-                        elif cmd == "SCRAPE":
-                            result = self._handle_scrape(data)
-                            res_q.put(result)
-                    except queue.Empty:
-                        pass
+                    # Command loop
+                    should_exit = False
+                    while True:
+                        try:
+                            cmd, data, res_q = self.cmd_queue.get(timeout=1)
+                            if cmd == "STOP":
+                                should_exit = True
+                                break
+                            elif cmd == "LOGOUT":
+                                print("[WA Bot] Performing WhatsApp logout...")
+                                try:
+                                    if self.page and not self.page.is_closed():
+                                        self.page.evaluate("() => { try { if (window.WPP && window.WPP.conn) window.WPP.conn.logout(); } catch(e){} }")
+                                        time.sleep(2)
+                                except Exception:
+                                    pass
+
+                                try:
+                                    if self.browser:
+                                        self.browser.close()
+                                except Exception:
+                                    pass
+
+                                import shutil
+                                if os.path.exists(self.user_data_dir):
+                                    shutil.rmtree(self.user_data_dir, ignore_errors=True)
+
+                                self.status = "starting"
+                                self.qr_base64 = None
+                                self._init_browser()
+                                self.page.goto("https://web.whatsapp.com", timeout=60000)
+                                if res_q:
+                                    res_q.put(True)
+                                print("[WA Bot] Logout complete. Waiting for new QR code...")
+                                break # Break command loop back into login/QR loop!
+                            elif cmd == "SCRAPE":
+                                result = self._handle_scrape(data)
+                                res_q.put(result)
+                        except queue.Empty:
+                            pass
+
+                    if should_exit:
+                        break
 
                 if self.browser:
                     self.browser.close()
