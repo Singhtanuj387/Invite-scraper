@@ -147,45 +147,43 @@ class WhatsAppBot:
         except Exception:
             return False
 
-    def _recover(self):
-        """Auto-recovers from a crash or closed page by reloading WhatsApp Web."""
-        print("[WA Bot] Attempting auto-recovery from crash...")
+    def _reload_whatsapp(self):
+        """Reloads WhatsApp Web and gives existing session time to decrypt and restore."""
         try:
-            if self.page:
-                try:
-                    self.page.close()
-                except Exception:
-                    pass
-                self.page = None
-
+            print("[WA Bot] Checking and reloading WhatsApp Web page...")
             if not self.browser or not self.browser.is_connected():
-                print("[WA Bot] Chromium process disconnected. Relaunching browser context...")
                 self._init_browser()
-            else:
+            elif not self.page or self.page.is_closed():
                 self.page = self.browser.new_page()
                 self.page.on("crash", lambda p: print("[WA Bot] Warning: Page crash event triggered!"))
 
-            print("[WA Bot] Navigating to WhatsApp Web...")
             self.page.goto("https://web.whatsapp.com", timeout=60000)
 
-            element = self.page.wait_for_selector("canvas, #pane-side", timeout=35000)
-            if element:
-                tag = element.evaluate("el => el.tagName").lower()
-                if tag == "canvas":
-                    self.status = "needs_scan"
-                    time.sleep(2)
-                    self.qr_base64 = self.page.evaluate('document.querySelector("canvas").toDataURL()')
-                    return False
-                else:
+            # Wait up to 10 seconds for #pane-side to restore from saved session
+            try:
+                el = self.page.wait_for_selector("#pane-side", timeout=10000)
+                if el:
                     self._inject_wpp()
                     self.status = "logged_in"
                     self.qr_base64 = None
-                    print("[WA Bot] Auto-recovery successful! WhatsApp Web reconnected.")
+                    print("[WA Bot] Successfully reconnected to saved session (#pane-side active)!")
                     return True
+            except Exception:
+                pass
+
+            # If #pane-side didn't appear, check if canvas (QR code) is active
+            try:
+                el = self.page.wait_for_selector("canvas", timeout=5000)
+                if el:
+                    self.status = "needs_scan"
+                    self.qr_base64 = self.page.evaluate('document.querySelector("canvas") ? document.querySelector("canvas").toDataURL() : null')
+                    return False
+            except Exception:
+                pass
+
             return False
         except Exception as e:
-            print(f"[WA Bot] Auto-recovery failed: {e}")
-            self.status = "error"
+            print(f"[WA Bot] Reload error: {e}")
             return False
 
     def _run_loop(self):
@@ -194,35 +192,49 @@ class WhatsAppBot:
                 self.playwright = p
                 self._init_browser()
 
-                print("[WA Bot] Loading WhatsApp Web...")
-                self.page.goto("https://web.whatsapp.com", timeout=60000)
-
                 while True:
-                    # Check if logged in or needs QR
-                    while True:
-                        try:
-                            # Check for stop command
-                            with self.cmd_queue.mutex:
-                                stop_idx = None
-                                for i, item in enumerate(self.cmd_queue.queue):
-                                    if item[0] == "STOP":
-                                        stop_idx = i
-                                        break
-                                if stop_idx is not None:
-                                    self.cmd_queue.queue.pop(stop_idx)
-                                    if self.browser:
-                                        self.browser.close()
-                                    self.status = "stopped"
-                                    return
+                    # ---------------------------------------------------------
+                    # STAGE 1: AUTHENTICATION / LOGIN LOOP
+                    # ---------------------------------------------------------
+                    print("[WA Bot] Loading WhatsApp Web...")
+                    self.page.goto("https://web.whatsapp.com", timeout=60000)
 
-                            # Look for the chat list (logged in) or the QR code canvas
-                            element = self.page.wait_for_selector("canvas, #pane-side", timeout=3000)
+                    while True:
+                        # Check for STOP command
+                        with self.cmd_queue.mutex:
+                            stop_idx = None
+                            for i, item in enumerate(self.cmd_queue.queue):
+                                if item[0] == "STOP":
+                                    stop_idx = i
+                                    break
+                            if stop_idx is not None:
+                                self.cmd_queue.queue.pop(stop_idx)
+                                if self.browser:
+                                    self.browser.close()
+                                self.status = "stopped"
+                                return
+
+                        # Check if saved session already restored
+                        try:
+                            logged_in_el = self.page.wait_for_selector("#pane-side", timeout=5000)
+                            if logged_in_el:
+                                print("[WA Bot] Logged in session detected!")
+                                self._inject_wpp()
+                                self.status = "logged_in"
+                                self.qr_base64 = None
+                                break
+                        except Exception:
+                            pass
+
+                        # If not logged in yet, look for canvas (QR code) or pane-side
+                        try:
+                            element = self.page.wait_for_selector("canvas, #pane-side", timeout=4000)
                             if element:
                                 tag = element.evaluate("el => el.tagName").lower()
                                 if tag == "canvas":
                                     self.status = "needs_scan"
-                                    time.sleep(2) # Let QR fully render
-                                    self.qr_base64 = self.page.evaluate('document.querySelector("canvas").toDataURL()')
+                                    time.sleep(1) # Let QR fully render
+                                    self.qr_base64 = self.page.evaluate('document.querySelector("canvas") ? document.querySelector("canvas").toDataURL() : null')
                                     time.sleep(2)
                                     continue
                                 else:
@@ -235,21 +247,25 @@ class WhatsAppBot:
                             err_msg = str(e)
                             if "Event loop is closed" in err_msg or "Target page, context or browser has been closed" in err_msg:
                                 print("[WA Bot] Browser closed, exiting loop.")
-                                break
+                                return
                             if "Timeout" not in err_msg:
                                 print("[WA Bot] Status loop error:", err_msg)
                                 time.sleep(1)
 
-                    print("[WA Bot] Logged in successfully!")
+                    print("[WA Bot] Ready! Logged in successfully.")
 
-                    # Command loop
-                    should_exit = False
+                    # ---------------------------------------------------------
+                    # STAGE 2: COMMAND EXECUTION LOOP
+                    # ---------------------------------------------------------
+                    session_lost = False
                     while True:
                         try:
                             cmd, data, res_q = self.cmd_queue.get(timeout=1)
                             if cmd == "STOP":
-                                should_exit = True
-                                break
+                                if self.browser:
+                                    self.browser.close()
+                                self.status = "stopped"
+                                return
                             elif cmd == "LOGOUT":
                                 print("[WA Bot] Performing WhatsApp logout...")
                                 try:
@@ -272,19 +288,23 @@ class WhatsAppBot:
                                 self.status = "starting"
                                 self.qr_base64 = None
                                 self._init_browser()
-                                self.page.goto("https://web.whatsapp.com", timeout=60000)
                                 if res_q:
                                     res_q.put(True)
-                                print("[WA Bot] Logout complete. Waiting for new QR code...")
-                                break # Break command loop back into login/QR loop!
+                                print("[WA Bot] Logout complete. Switching to QR scan mode...")
+                                session_lost = True
+                                break
                             elif cmd == "SCRAPE":
-                                result = self._handle_scrape(data)
+                                result, is_alive = self._handle_scrape(data)
                                 res_q.put(result)
+                                if not is_alive:
+                                    print("[WA Bot] Session lost during scrape. Re-entering authentication stage...")
+                                    session_lost = True
+                                    break
                         except queue.Empty:
                             pass
 
-                    if should_exit:
-                        break
+                    if session_lost:
+                        continue # Re-enter Stage 1
 
                 if self.browser:
                     self.browser.close()
@@ -311,20 +331,20 @@ class WhatsAppBot:
         try:
             if not invite_url.startswith("https://chat.whatsapp.com/"):
                 result["Notes"] = "Invalid link format"
-                return result
+                return result, True
 
             code = invite_url.split("/")[-1].strip()
             if not code:
                 result["Notes"] = "Missing invite code"
-                return result
+                return result, True
 
             # Verify page responsiveness before attempting scrape
             if not self._is_page_healthy():
-                print("[WA Bot] Page is not healthy/responsive. Triggering auto-recovery...")
-                recovered = self._recover()
+                print("[WA Bot] Page is not healthy/responsive. Triggering reload...")
+                recovered = self._reload_whatsapp()
                 if not recovered:
                     result["Notes"] = "WhatsApp session disconnected/crashed"
-                    return result
+                    return result, False
 
             info = None
             # Allow 1 retry on crash
@@ -354,22 +374,26 @@ class WhatsAppBot:
                     err_lower = err_msg.lower()
                     if "target crashed" in err_lower or "target closed" in err_lower or "closed" in err_lower or "destroyed" in err_lower:
                         if attempt == 0:
-                            print("[WA Bot] Target crashed detected! Attempting recovery and retry...")
-                            if self._recover():
+                            print("[WA Bot] Target crashed detected! Attempting reload and retry...")
+                            if self._reload_whatsapp():
                                 continue
                     result["Notes"] = f"Error: {err_msg}"
-                    return result
+                    return result, False
             
             if not info or "error" in info:
                 err = info.get("error", "Unknown error") if info else "Empty response"
                 err_lower = err.lower()
-                if "reason: 404" in err_lower or "reason: 410" in err_lower or "not found" in err_lower or "invalid invite code" in err_lower:
+                if "wppconnect is not ready" in err_lower:
+                    self._inject_wpp()
+                    result["Notes"] = "Re-initialized WhatsApp modules"
+                    return result, True
+                elif "reason: 404" in err_lower or "reason: 410" in err_lower or "not found" in err_lower or "invalid invite code" in err_lower:
                     result["Processing Status"] = "Success"
                     result["Status"] = "Expired"
                     result["Notes"] = "Invalid or expired link"
                 else:
                     result["Notes"] = f"WPP Error: {err}"
-                return result
+                return result, True
 
             # Parse the successful response
             result["Processing Status"] = "Success"
@@ -413,9 +437,9 @@ class WhatsAppBot:
                         result["Country"] = "Unknown"
                         
             # Short sleep between requests to avoid trigger rate limits
-            time.sleep(1.5)
-            return result
+            time.sleep(1.2)
+            return result, True
             
         except Exception as e:
             result["Notes"] = f"Error: {str(e)}"
-            return result
+            return result, True

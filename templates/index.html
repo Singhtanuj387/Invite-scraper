@@ -915,6 +915,9 @@
                 <p style="color: var(--orange); margin-top: 15px; font-size: 0.85rem;">
                     ⚠️ Use a burner number! High risk of ban.
                 </p>
+                <button type="button" onclick="document.getElementById('qrModal').style.display='none'" style="margin-top: 12px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: var(--text-secondary); padding: 6px 18px; border-radius: 6px; cursor: pointer; font-size: 0.8rem;">
+                    Dismiss (Reopen from status badge)
+                </button>
             </div>
         </div>
 
@@ -1470,6 +1473,10 @@
         
         document.getElementById('waStatusBadge').addEventListener('click', async () => {
             const text = document.getElementById('waStatusText').textContent;
+            if (text.includes('Needs Scan')) {
+                document.getElementById('qrModal').style.display = 'flex';
+                return;
+            }
             if (text.includes('Disconnected') || text.includes('Error')) {
                 document.getElementById('waStatusText').textContent = 'Restarting...';
                 await fetch('/api/retry_login', { method: 'POST' });
